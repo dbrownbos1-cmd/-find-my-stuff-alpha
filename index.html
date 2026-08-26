@@ -41,11 +41,11 @@ details.group>summary::-webkit-details-marker{display:none}
 .groupBody{padding:0 12px 12px}
 .areaGroup{margin:8px 0;border-top:1px solid #eef1ef;padding-top:8px}
 .areaTitle{font-weight:800;color:var(--green);margin:6px 0}
-.locationBtn{width:100%;text-align:left;background:#fff;color:var(--ink);border:1px solid var(--line);margin:6px 0;padding:12px}
+.locationBtn{width:100%;text-align:left;background:#fff;color:var(--ink);border:1px solid var(--line);margin:7px 0;padding:14px;position:relative}.locationBtn:after{content:"›";position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:26px;color:var(--green)}
 .locationBtn small{display:block;color:var(--muted);font-weight:500;margin-top:3px}
 .searchHit{padding:12px;border:1px solid var(--line);border-radius:12px;margin:8px 0;cursor:pointer;background:#fff}
 .searchHit b{display:block}
-.sectionTitle{font-size:16px;font-weight:800;margin:18px 0 8px}
+.sectionTitle{font-size:16px;font-weight:800;margin:18px 0 8px}.manageActions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:14px 0}.editPanel{background:#fafcfb;border:1px solid var(--line);border-radius:14px;padding:13px;margin:10px 0}.editPanel label{font-size:13px;font-weight:800;color:var(--muted)}.tapHint{font-size:13px;color:var(--muted);margin:-2px 0 10px}.detailPath{font-weight:700;color:var(--green);margin-bottom:10px}
 .photoStrip{display:flex;gap:8px;overflow:auto;padding:4px 0 8px}
 .photoThumb{width:110px;height:90px;object-fit:cover;border-radius:10px;border:1px solid var(--line);flex:0 0 auto}
 </style>
@@ -87,7 +87,7 @@ details.group>summary::-webkit-details-marker{display:none}
     <section id="inventory" class="page">
       <div class="card">
         <h2>Your inventory</h2>
-        <p class="muted">Open a place, then an area, then a saved location.</p>
+        <p class="muted">Tap a place to open it. Then choose an area and location.</p><div class="tapHint">Every row with a › opens the next level.</div>
         <div id="inventoryList"></div>
       </div>
     </section>
@@ -96,13 +96,17 @@ details.group>summary::-webkit-details-marker{display:none}
       <button class="secondary" onclick="go('inventory')">← Back to inventory</button>
       <div class="card">
         <h2 id="detailTitle">Location</h2>
-        <div id="detailCrumb" class="muted"></div>
+        <div id="detailCrumb" class="detailPath"></div>
+        <div class="manageActions">
+          <button onclick="toggleEditNames()">✏️ Edit names</button>
+          <button class="secondary" onclick="document.getElementById('addItemsText').focus()">＋ Add items</button>
+        </div>
 
         <img id="detailPhoto" class="spotPhoto hide" alt="Saved location photo">
         <div id="noDetailPhoto" class="muted">No saved photo for this location yet.</div>
 
-        <div class="sectionTitle">Names</div>
-
+        <div id="nameEditPanel" class="editPanel hide">
+        <div class="sectionTitle" style="margin-top:0">Edit names</div>
         <label>Place</label>
         <input id="detailPlaceName">
         <button class="secondary" onclick="savePlaceName()">Save place name</button>
@@ -114,17 +118,17 @@ details.group>summary::-webkit-details-marker{display:none}
         <label style="display:block;margin-top:12px">Location</label>
         <input id="detailSpotName">
         <button onclick="saveSpotName()">Save location name</button>
+        </div>
 
-        <div class="sectionTitle">Current items</div>
+        <div class="sectionTitle">What’s here</div>
         <div id="detailItems"></div>
-        <button class="secondary" onclick="addBlankDetailItem()">+ Add an item</button>
-        <button style="margin-top:8px" onclick="saveItemEdits()">Save item edits</button>
+        <div class="row"><button class="secondary" onclick="addBlankDetailItem()">+ Add item</button><button onclick="saveItemEdits()">Save item changes</button></div>
 
-        <div class="sectionTitle">Add items to this location</div>
+        <div class="sectionTitle">Add more items</div>
         <textarea id="addItemsText" rows="3" placeholder="One item per line"></textarea>
         <button onclick="addItemsToSpot()">Add items</button>
 
-        <div class="sectionTitle">Photo / rescan this location</div>
+        <div class="sectionTitle">Update this location with a photo</div><p class="muted">Take a new photo to let AI add to or replace the current item list.</p>
         <div class="row">
           <button onclick="$('detailCameraInput').click()">📷 Take new photo</button>
           <button class="secondary" onclick="$('detailLibraryInput').click()">🖼️ Choose photo</button>
@@ -451,12 +455,12 @@ function renderInventory(){
     const total=Object.values(areaObj).flat().reduce((n,s)=>n+(s.items||[]).filter(i=>i.is_active!==false).length,0);
     const body=Object.entries(areaObj).sort().map(([areaName,list])=>`
       <div class="areaGroup">
-        <div class="areaTitle">${esc(areaName)}</div>
+        <div class="areaTitle">📍 ${esc(areaName)}</div>
         ${list.map(locationButton).join('')}
       </div>`).join('');
 
     return `<details class="group">
-      <summary><span>${esc(placeName)}</span><span class="muted">${total} items ▾</span></summary>
+      <summary><span>🏠 ${esc(placeName)}</span><span class="muted">${total} items &nbsp;›</span></summary>
       <div class="groupBody">${body}</div>
     </details>`;
   }).join('')||'<p class="muted">Nothing inventoried yet.</p>';
@@ -481,10 +485,16 @@ function runSearch(){
   },250);
 }
 
+function toggleEditNames(){
+  $('nameEditPanel').classList.toggle('hide');
+  if(!$('nameEditPanel').classList.contains('hide')) $('detailPlaceName').focus();
+}
+
 async function openSpot(id){
   if(!id)return;
   go('detail');
   $('detailStatus').textContent='Loading location…';
+  $('nameEditPanel').classList.add('hide');
 
   try{
     const j=await api('?action=spot-detail&spot_id='+encodeURIComponent(id));
