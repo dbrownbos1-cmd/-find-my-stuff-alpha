@@ -165,10 +165,15 @@ details.group>summary::-webkit-details-marker{display:none}
         <div id="crumb" class="crumb"></div>
 
         <div id="stepPlace" class="step active">
-          <h3>1. Choose a place type</h3>
+          <h3>1. Choose a place</h3>
+          <div id="existingPlaceWrap" class="hide">
+            <label>Use an existing place</label>
+            <div class="row" id="existingPlaceChoices" style="margin:8px 0 16px"></div>
+            <div class="muted" style="font-size:13px;margin-bottom:12px">Or create a new place below.</div>
+          </div>
           <div class="grid" id="placeTypeGrid"></div>
           <label>Name this place</label>
-          <input id="placeName" placeholder="e.g. New Gloucester House, Maine Cottage">
+          <input id="placeName" placeholder="e.g. New Gloucester House, Maine Cottage" oninput="clearSelectedPlace()">
           <button onclick="nextFromPlace()">Next: choose an area</button>
         </div>
 
@@ -238,9 +243,10 @@ const ANALYZE_API='/api/analyze';
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 
 let spots=[];
+let availablePlaces=[];
 let photoFile=null;
 let reviewed=[];
-let wizard={placeType:'Home',place:'',area:'Kitchen',spot:'',position:''};
+let wizard={placeId:null,placeType:'Home',place:'',area:'Kitchen',spot:'',position:''};
 
 let detailSpot=null;
 let detailItems=[];
@@ -253,8 +259,32 @@ const placeTypes=['Home','Second Home','Camp/Cottage','Storage Unit','Office','R
 const areas=['Kitchen','Pantry','Living Room','Dining Room','Bedroom','Bathroom','Closet','Laundry','Garage','Basement','Attic','Shed','Office','Outside','Other'];
 
 function buildChoices(){
-  $('placeTypeGrid').innerHTML=placeTypes.map(x=>`<button class="choice ${x==='Home'?'active':''}" data-val="${esc(x)}" onclick="choosePlaceType(this)">${esc(x)}</button>`).join('');
-  $('areaGrid').innerHTML=areas.map(x=>`<button class="choice ${x==='Kitchen'?'active':''}" data-val="${esc(x)}" onclick="chooseArea(this)">${esc(x)}</button>`).join('');
+  $('placeTypeGrid').innerHTML=placeTypes.map(x=>`<button class="choice ${x===wizard.placeType?'active':''}" data-val="${esc(x)}" onclick="choosePlaceType(this)">${esc(x)}</button>`).join('');
+  $('areaGrid').innerHTML=areas.map(x=>`<button class="choice ${x===wizard.area?'active':''}" data-val="${esc(x)}" onclick="chooseArea(this)">${esc(x)}</button>`).join('');
+  renderExistingPlaces();
+}
+function renderExistingPlaces(){
+  const wrap=$('existingPlaceWrap');
+  if(!availablePlaces.length){wrap.classList.add('hide');return}
+  wrap.classList.remove('hide');
+  $('existingPlaceChoices').innerHTML=availablePlaces.map(p=>`<button class="${wizard.placeId===p.id?'':'secondary'}" onclick="chooseExistingPlace('${p.id}')">${esc(p.name)}</button>`).join('');
+}
+function chooseExistingPlace(id){
+  const p=availablePlaces.find(x=>x.id===id);
+  if(!p)return;
+  wizard.placeId=p.id;
+  wizard.place=p.name;
+  wizard.placeType=p.place_type||'Home';
+  $('placeName').value=p.name;
+  buildChoices();
+  updateCrumb();
+}
+function clearSelectedPlace(){
+  const selected=availablePlaces.find(x=>x.id===wizard.placeId);
+  if(selected && $('placeName').value!==selected.name){
+    wizard.placeId=null;
+    renderExistingPlaces();
+  }
 }
 function choosePlaceType(b){
   wizard.placeType=b.dataset.val;
@@ -296,7 +326,7 @@ function go(p){
 
 function startWizard(){
   go('add');
-  wizard={placeType:'Home',place:'',area:'Kitchen',spot:'',position:''};
+  wizard={placeId:null,placeType:'Home',place:'',area:'Kitchen',spot:'',position:''};
   $('placeName').value='';
   $('spotName').value='';
   photoFile=null;
@@ -320,6 +350,8 @@ function updateCrumb(){
 function nextFromPlace(){
   const v=$('placeName').value.trim();
   if(!v){$('placeName').focus();return}
+  const selected=availablePlaces.find(x=>x.id===wizard.placeId);
+  if(!selected || selected.name!==v) wizard.placeId=null;
   wizard.place=v;
   updateCrumb();
   showStep('stepArea');
@@ -425,9 +457,11 @@ function addReviewItem(){
 }
 
 async function load(){
-  const j=await api('?action=inventory');
-  spots=j.spots||[];
+  const [inventory,placeList]=await Promise.all([api('?action=inventory'),api('?action=places')]);
+  spots=inventory.spots||[];
+  availablePlaces=placeList.places||[];
   renderAll();
+  renderExistingPlaces();
 }
 function renderAll(){
   const itemCount=spots.reduce((n,s)=>n+(s.items||[]).filter(i=>i.is_active!==false).length,0);
@@ -765,6 +799,7 @@ async function saveReviewed(again){
     await api('?action=spot',{
       method:'POST',
       body:JSON.stringify({
+        place_id:wizard.placeId,
         place:wizard.place,
         place_type:wizard.placeType,
         area:wizard.area,
