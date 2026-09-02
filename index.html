@@ -88,6 +88,7 @@ details.group>summary::-webkit-details-marker{display:none}
       <div class="card">
         <h2>Your inventory</h2>
         <p class="muted">Tap a place to open it. Then choose an area and location.</p><div class="tapHint">Every row with a › opens the next level.</div>
+        <div id="inventoryStatus" class="status hide"></div>
         <div id="inventoryList"></div>
       </div>
     </section>
@@ -585,9 +586,11 @@ async function saveItemEdits(){
       });
     }
 
-    $('detailStatus').textContent='Saved.';
     await load();
-    await openSpot(detailSpot.id);
+    go('inventory');
+    $('inventoryStatus').textContent='✓ Item changes saved.';
+    $('inventoryStatus').className='status';
+    setTimeout(()=>$('inventoryStatus').classList.add('hide'),4000);
   }catch(e){
     $('detailStatus').textContent=e.message;
   }
