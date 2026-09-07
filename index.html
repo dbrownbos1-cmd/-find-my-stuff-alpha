@@ -165,28 +165,32 @@ details.group>summary::-webkit-details-marker{display:none}
         <div id="crumb" class="crumb"></div>
 
         <div id="stepPlace" class="step active">
-          <h3>1. Choose a place</h3>
+          <h3>1. Which property are you in?</h3>
           <div id="existingPlaceWrap" class="hide">
-            <label>Use an existing place</label>
-            <div class="row" id="existingPlaceChoices" style="margin:8px 0 16px"></div>
-            <div class="muted" style="font-size:13px;margin-bottom:12px">Or create a new place below.</div>
+            <label>Choose an existing place</label>
+            <div class="grid" id="existingPlaceChoices" style="margin:8px 0 16px"></div>
           </div>
-          <div class="grid" id="placeTypeGrid"></div>
-          <label>Name this place</label>
-          <input id="placeName" placeholder="e.g. New Gloucester House, Maine Cottage" oninput="clearSelectedPlace()">
-          <button onclick="nextFromPlace()">Next: choose an area</button>
+          <button id="showNewPlaceBtn" class="secondary" onclick="showNewPlaceForm()">＋ Add a new place</button>
+          <div id="newPlaceFields" class="hide" style="margin-top:16px">
+            <div class="muted" style="font-size:13px;margin-bottom:12px">Only use this when adding a genuinely different property.</div>
+            <label>What kind of place is it?</label>
+            <div class="grid" id="placeTypeGrid"></div>
+            <label>Name the new place</label>
+            <input id="placeName" placeholder="e.g. Florida House">
+            <button onclick="nextFromPlace()">Create place & choose a room</button>
+          </div>
         </div>
 
         <div id="stepArea" class="step">
-          <h3>2. Choose an area</h3>
+          <h3>2. Which room or area?</h3>
           <div class="grid" id="areaGrid"></div>
-          <button class="secondary" onclick="showStep('stepPlace')">← Back</button>
+          <button class="secondary" onclick="showStep('stepPlace')">← Change property</button>
         </div>
 
         <div id="stepSpot" class="step">
-          <h3>3. Where in this area?</h3>
-          <label>Name the location</label>
-          <input id="spotName" placeholder="e.g. NG Junk Drawer, top drawer left of sink">
+          <h3>3. What exact spot are you inventorying?</h3>
+          <label>Name the drawer, cabinet, shelf, closet, or bin</label>
+          <input id="spotName" placeholder="e.g. Medicine cabinet, vanity drawer, linen closet">
           <div class="row">
             <button class="secondary" onclick="showStep('stepArea')">← Back</button>
             <button onclick="nextFromSpot()">Next: add a photo</button>
@@ -247,6 +251,7 @@ let availablePlaces=[];
 let photoFile=null;
 let reviewed=[];
 let wizard={placeId:null,placeType:'Home',place:'',area:'Kitchen',spot:'',position:''};
+let creatingNewPlace=false;
 
 let detailSpot=null;
 let detailItems=[];
@@ -264,27 +269,33 @@ function buildChoices(){
   renderExistingPlaces();
 }
 function renderExistingPlaces(){
-  const wrap=$('existingPlaceWrap');
-  if(!availablePlaces.length){wrap.classList.add('hide');return}
-  wrap.classList.remove('hide');
-  $('existingPlaceChoices').innerHTML=availablePlaces.map(p=>`<button class="${wizard.placeId===p.id?'':'secondary'}" onclick="chooseExistingPlace('${p.id}')">${esc(p.name)}</button>`).join('');
+  const hasPlaces=availablePlaces.length>0;
+  $('existingPlaceWrap').classList.toggle('hide',!hasPlaces);
+  $('showNewPlaceBtn').classList.toggle('hide',!hasPlaces||creatingNewPlace);
+  $('newPlaceFields').classList.toggle('hide',!creatingNewPlace);
+  $('existingPlaceChoices').innerHTML=availablePlaces.map(p=>`<button class="choice" onclick="chooseExistingPlace('${p.id}')">${esc(p.name)}</button>`).join('');
 }
 function chooseExistingPlace(id){
   const p=availablePlaces.find(x=>x.id===id);
   if(!p)return;
+  creatingNewPlace=false;
   wizard.placeId=p.id;
   wizard.place=p.name;
   wizard.placeType=p.place_type||'Home';
-  $('placeName').value=p.name;
-  buildChoices();
+  $('placeName').value='';
   updateCrumb();
+  renderExistingPlaces();
+  showStep('stepArea');
 }
-function clearSelectedPlace(){
-  const selected=availablePlaces.find(x=>x.id===wizard.placeId);
-  if(selected && $('placeName').value!==selected.name){
-    wizard.placeId=null;
-    renderExistingPlaces();
-  }
+function showNewPlaceForm(){
+  creatingNewPlace=true;
+  wizard.placeId=null;
+  wizard.place='';
+  wizard.placeType='Home';
+  $('placeName').value='';
+  updateCrumb();
+  buildChoices();
+  setTimeout(()=>$('placeName').focus(),0);
 }
 function choosePlaceType(b){
   wizard.placeType=b.dataset.val;
@@ -327,6 +338,7 @@ function go(p){
 function startWizard(){
   go('add');
   wizard={placeId:null,placeType:'Home',place:'',area:'Kitchen',spot:'',position:''};
+  creatingNewPlace=!availablePlaces.length;
   $('placeName').value='';
   $('spotName').value='';
   photoFile=null;
@@ -344,14 +356,19 @@ function showStep(id){
   window.scrollTo({top:0,behavior:'smooth'});
 }
 function updateCrumb(){
-  const bits=[wizard.place,wizard.area,wizard.spot].filter(Boolean);
-  $('crumb').textContent=bits.length?bits.join(' → '):'';
+  const bits=[];
+  if(wizard.place)bits.push('Place: '+wizard.place);
+  if(wizard.area)bits.push('Room: '+wizard.area);
+  if(wizard.spot)bits.push('Spot: '+wizard.spot);
+  $('crumb').textContent=bits.join('  ›  ');
 }
 function nextFromPlace(){
   const v=$('placeName').value.trim();
   if(!v){$('placeName').focus();return}
-  const selected=availablePlaces.find(x=>x.id===wizard.placeId);
-  if(!selected || selected.name!==v) wizard.placeId=null;
+  const norm=x=>String(x||'').trim().replace(/\s+/g,' ').toLowerCase();
+  const existing=availablePlaces.find(p=>norm(p.name)===norm(v));
+  if(existing){chooseExistingPlace(existing.id);return}
+  wizard.placeId=null;
   wizard.place=v;
   updateCrumb();
   showStep('stepArea');
