@@ -48,6 +48,17 @@ details.group>summary::-webkit-details-marker{display:none}
 .sectionTitle{font-size:16px;font-weight:800;margin:18px 0 8px}.manageActions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:14px 0}.editPanel{background:#fafcfb;border:1px solid var(--line);border-radius:14px;padding:13px;margin:10px 0}.editPanel label{font-size:13px;font-weight:800;color:var(--muted)}.tapHint{font-size:13px;color:var(--muted);margin:-2px 0 10px}.detailPath{font-weight:700;color:var(--green);margin-bottom:10px}
 .photoStrip{display:flex;gap:8px;overflow:auto;padding:4px 0 8px}
 .photoThumb{width:110px;height:90px;object-fit:cover;border-radius:10px;border:1px solid var(--line);flex:0 0 auto}
+.homeRecent{padding:0}
+.homeRecent>summary{list-style:none;cursor:pointer;padding:16px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.homeRecent>summary::-webkit-details-marker{display:none}
+.homeRecent>summary h2{margin:0}
+.homeRecentBody{padding:0 16px 16px}
+.homeRecent .openLabel{display:none}
+.homeRecent[open] .closedLabel{display:none}
+.homeRecent[open] .openLabel{display:inline}
+.toggleLabel{color:var(--green);font-size:14px;font-weight:800;white-space:nowrap}
+.toggleChevron{display:inline-block;margin-left:4px;transition:transform .15s ease}
+.homeRecent[open] .toggleChevron{transform:rotate(180deg)}
 </style>
 </head>
 <body>
@@ -73,15 +84,26 @@ details.group>summary::-webkit-details-marker{display:none}
       </div>
 
       <div class="card">
+        <h2>Your places</h2>
+        <p class="muted">Tap a place to see its rooms and inventory.</p>
+        <div id="homePlaces"></div>
+      </div>
+
+      <div class="card">
         <h2>Find something</h2>
         <input id="search" placeholder="Where is my pizza cutter?" oninput="runSearch()">
         <div id="searchResults"></div>
       </div>
 
-      <div class="card">
-        <h2>Recent inventory</h2>
-        <div id="recent"></div>
-      </div>
+      <details class="card homeRecent">
+        <summary>
+          <h2>Recent inventory</h2>
+          <span class="toggleLabel"><span class="closedLabel">Show</span><span class="openLabel">Hide</span><span class="toggleChevron">⌄</span></span>
+        </summary>
+        <div class="homeRecentBody">
+          <div id="recent"></div>
+        </div>
+      </details>
     </section>
 
     <section id="inventory" class="page">
@@ -532,10 +554,26 @@ async function load(){
 }
 function renderAll(){
   const itemCount=spots.reduce((n,s)=>n+(s.items||[]).filter(i=>i.is_active!==false).length,0);
-  const places=new Set(spots.map(s=>s.place?.name).filter(Boolean));
-  $('summary').textContent=`${places.size} place${places.size===1?'':'s'} · ${spots.length} location${spots.length===1?'':'s'} · ${itemCount} items`;
+  const placeCount=availablePlaces.length||new Set(spots.map(s=>s.place?.name).filter(Boolean)).size;
+  $('summary').textContent=placeCount+' place'+(placeCount===1?'':'s')+' · '+spots.length+' location'+(spots.length===1?'':'s')+' · '+itemCount+' items';
+  renderHomePlaces();
   $('recent').innerHTML=spots.slice(0,4).map(locationButton).join('')||'<p class="muted">Nothing inventoried yet.</p>';
   renderInventory();
+}
+function renderHomePlaces(){
+  const list=[...availablePlaces].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  $('homePlaces').innerHTML=list.map(p=>{
+    const placeSpots=spots.filter(s=>s.place?.id===p.id);
+    const count=placeSpots.reduce((n,s)=>n+(s.items||[]).filter(i=>i.is_active!==false).length,0);
+    return '<button class="locationBtn" data-id="'+esc(p.id)+'" onclick="openPlace(this.dataset.id)"><b>🏠 '+esc(p.name)+'</b><small>'+placeSpots.length+' location'+(placeSpots.length===1?'':'s')+' · '+count+' item'+(count===1?'':'s')+'</small></button>';
+  }).join('')||'<p class="muted">No places yet. Inventory your first spot to add one.</p>';
+}
+function openPlace(id){
+  go('inventory');
+  const group=[...document.querySelectorAll('#inventoryList details.group')].find(x=>x.dataset.placeId===id);
+  if(!group)return;
+  group.open=true;
+  setTimeout(()=>group.scrollIntoView({behavior:'smooth',block:'start'}),100);
 }
 function locationButton(s){
   const count=(s.items||[]).filter(i=>i.is_active!==false).length;
@@ -561,7 +599,8 @@ function renderInventory(){
         ${list.map(locationButton).join('')}
       </div>`).join('');
 
-    return `<details class="group">
+    const placeId=Object.values(areaObj).flat()[0]?.place?.id||'';
+    return `<details class="group" data-place-id="${esc(placeId)}">
       <summary><span>🏠 ${esc(placeName)}</span><span class="muted">${total} items &nbsp;›</span></summary>
       <div class="groupBody">${body}</div>
     </details>`;
