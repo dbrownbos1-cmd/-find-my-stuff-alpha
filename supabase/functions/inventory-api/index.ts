@@ -146,6 +146,44 @@ Deno.serve(async (req) => {
       return json({ spot: spotIns.data, items: itemIns.data }, 201);
     }
 
+    if (req.method === 'POST' && action === 'photo-only') {
+      const body = await req.json();
+      const spotId = String(body.spot_id || '');
+      const photoPath = String(body.photo_path || '');
+      if (!spotId || !photoPath.startsWith(user.id + '/') || photoPath.includes('..')) {
+        return json({ error: 'A photo belonging to your account is required' }, 400);
+      }
+      const target = await supabase.from('spots').select('id').eq('id', spotId).eq('user_id', user.id).single();
+      if (target.error) return json({ error: 'Location not found' }, 404);
+      const items = await currentInventory(spotId);
+      const snapshot = await supabase.from('spot_snapshots').insert({
+        user_id: user.id, spot_id: spotId, photo_path: photoPath,
+        inventory: items.map((x: any) => x.name), snapshot_type: 'photo'
+      });
+      if (snapshot.error) throw snapshot.error;
+      const update = await supabase.from('spots').update({ primary_photo_path: photoPath }).eq('id', spotId).eq('user_id', user.id);
+      if (update.error) throw update.error;
+      return json({ ok: true });
+    }
+
+    if (req.method === 'DELETE' && action === 'photo') {
+      const snapshotId = String(url.searchParams.get('snapshot_id') || '');
+      const snapshot = await supabase.from('spot_snapshots').select('id,photo_path').eq('id', snapshotId).eq('user_id', user.id).single();
+      if (snapshot.error) return json({ error: 'Photo not found' }, 404);
+      const path = snapshot.data.photo_path;
+      if (!path) return json({ ok: true });
+      if (!path.startsWith(user.id + '/') || path.includes('..')) return json({ error: 'Photo does not belong to your account' }, 403);
+      const removal = await supabase.storage.from('inventory-photos').remove([path]);
+      if (removal.error) throw removal.error;
+      // A photo can appear in more than one snapshot. Keep the inventory history,
+      // but detach every reference to the deleted file within this account.
+      const snapshots = await supabase.from('spot_snapshots').update({ photo_path: null }).eq('user_id', user.id).eq('photo_path', path);
+      if (snapshots.error) throw snapshots.error;
+      const spots = await supabase.from('spots').update({ primary_photo_path: null }).eq('user_id', user.id).eq('primary_photo_path', path);
+      if (spots.error) throw spots.error;
+      return json({ ok: true });
+    }
+
     if (req.method === 'POST' && action === 'add-items') {
       const body = await req.json();
       const spotId = String(body.spot_id || '');
