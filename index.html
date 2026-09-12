@@ -152,7 +152,7 @@ details.group>summary::-webkit-details-marker{display:none}
         <button id="addItemsBtn" onclick="addItemsToSpot()">Add items</button>
         <div id="addItemsStatus" class="status" role="status" aria-live="polite"></div>
 
-        <div class="sectionTitle">Update this location with a photo</div><p class="muted">Take a new photo to let AI add to or replace the current item list.</p>
+        <div class="sectionTitle">Update this location with a photo</div><p class="muted">Save a new photo on its own, or analyze it to update the item list.</p>
         <div class="row">
           <button onclick="$('detailCameraInput').click()">📷 Take new photo</button>
           <button class="secondary" onclick="$('detailLibraryInput').click()">🖼️ Choose photo</button>
@@ -160,6 +160,7 @@ details.group>summary::-webkit-details-marker{display:none}
         <input id="detailCameraInput" class="hide" type="file" accept="image/*" capture="environment" onchange="detailPhotoPicked(this)">
         <input id="detailLibraryInput" class="hide" type="file" accept="image/*" onchange="detailPhotoPicked(this)">
         <img id="detailNewPreview" class="preview hide" alt="New location photo">
+        <button id="savePhotoOnlyBtn" class="hide" onclick="saveDetailScan('photo')">Save photo only</button>
         <button id="detailAnalyzeBtn" class="hide" onclick="analyzeDetailPhoto()">✨ Analyze new photo</button>
         <div id="detailAnalyzeStatus" class="status muted"></div>
 
@@ -168,10 +169,12 @@ details.group>summary::-webkit-details-marker{display:none}
           <div id="detailReviewItems"></div>
           <button class="secondary" onclick="addDetailReviewItem()">+ Add an item</button>
           <div class="row" style="margin-top:10px">
-            <button onclick="saveDetailScan('replace')">Replace current list</button>
-            <button class="secondary" onclick="saveDetailScan('add')">Add to current list</button>
+            <button id="replaceScanBtn" onclick="saveDetailScan('replace')">Replace current list</button>
+            <button id="addScanBtn" class="secondary" onclick="saveDetailScan('add')">Add to current list</button>
           </div>
         </div>
+
+        <div id="photoSaveStatus" class="status" role="status" aria-live="polite"></div>
 
         <div id="photoHistoryWrap" class="hide">
           <div class="sectionTitle">Photo history</div>
@@ -290,6 +293,8 @@ let saveInProgress=false;
 let detailSpot=null;
 let detailItems=[];
 let detailPhotoFile=null;
+let photoSaveBusy=false;
+let uploadedDetailPhoto=null;
 let detailReviewed=[];
 let addingItems=false;
 
@@ -383,15 +388,27 @@ async function token(){
   const{data}=await sb.auth.getSession();
   return data.session?.access_token||'';
 }
+let sessionRefresh=null;
+async function refreshAccessToken(){
+  if(!sessionRefresh)sessionRefresh=sb.auth.refreshSession().finally(()=>{sessionRefresh=null});
+  const {data,error}=await sessionRefresh;
+  if(error||!data.session?.access_token)throw new Error('Could not renew your session. Keep this screen open and try again. Do not log out.');
+  return data.session.access_token;
+}
 async function api(path='',opts={}){
-  const t=await token();
-  const r=await fetch(API+path,{...opts,headers:{'Content-Type':'application/json','Authorization':'Bearer '+t,...(opts.headers||{})}});
+  const send=t=>fetch(API+path,{...opts,headers:{'Content-Type':'application/json',apikey:SUPABASE_KEY,...(opts.headers||{}),'Authorization':'Bearer '+t}});
+  let t=await token();
+  if(!t)throw new Error('Your session is unavailable. Keep this screen open and do not log out.');
+  let r=await send(t);
+  // A 401 is rejected before writes begin; never replay other failed mutations.
+  if(r.status===401){t=await refreshAccessToken();r=await send(t)}
   const raw=await r.text();
   let j={};
   try{j=raw?JSON.parse(raw):{}}catch{}
-  if(!r.ok)throw new Error(j.error||'Request failed');
+  if(!r.ok)throw new Error(j.error||j.message||'Request failed');
   return j;
 }
+
 async function enterAlpha(){
   $('authStatus').textContent='Opening Alpha…';
   const{data,error}=await sb.auth.signInAnonymously();
@@ -633,9 +650,13 @@ function toggleEditNames(){
   if(!$('nameEditPanel').classList.contains('hide')) $('detailPlaceName').focus();
 }
 
-async function openSpot(id){
+async function openSpot(id,refreshOnly=false){
   if(!id)return;
-  go('detail');
+  if(!refreshOnly){
+    go('detail');
+    resetDetailPhoto();
+    $('photoSaveStatus').textContent='';
+  }
   $('detailStatus').textContent='Loading location…';
   $('nameEditPanel').classList.add('hide');
 
@@ -662,13 +683,23 @@ async function openSpot(id){
 
     renderDetailItems();
 
-    const photos=(detailSpot.snapshots||[]).filter(s=>s.photo_url);
+    const seenPhotos=new Set();
+    const photos=(detailSpot.snapshots||[]).filter(s=>{
+      if(!s.photo_url||seenPhotos.has(s.photo_path))return false;
+      seenPhotos.add(s.photo_path);return true;
+    });
     $('photoHistoryWrap').classList.toggle('hide',!photos.length);
-    $('photoHistory').innerHTML=photos.map(s=>`<img class="photoThumb" src="${esc(s.photo_url)}" alt="Saved location photo">`).join('');
+    $('photoHistory').innerHTML=photos.map(s=>`<div style="flex:0 0 120px">
+      <img class="photoThumb" src="${esc(s.photo_url)}" alt="Saved location photo">
+      <div class="muted" style="font-size:12px">${s.photo_path===detailSpot.primary_photo_path?'Current photo':'Previous photo'}</div>
+      <button class="danger" style="margin-top:6px;padding:8px" data-snapshot-id="${esc(s.id)}" onclick="deleteDetailPhoto(this.dataset.snapshotId)">Delete photo</button>
+    </div>`).join('');
 
     $('detailStatus').textContent='';
+    return true;
   }catch(e){
     $('detailStatus').textContent=e.message;
+    return false;
   }
 }
 
@@ -848,10 +879,14 @@ async function addItemsToSpot(){
 }
 
 function detailPhotoPicked(input){
+  if(photoSaveBusy)return;
   const f=input.files?.[0];
   if(!f)return;
 
   detailPhotoFile=f;
+  uploadedDetailPhoto=null;
+  $('savePhotoOnlyBtn').classList.remove('hide');
+  $('photoSaveStatus').textContent='';
   $('detailNewPreview').src=URL.createObjectURL(f);
   $('detailNewPreview').classList.remove('hide');
   $('detailAnalyzeBtn').classList.remove('hide');
@@ -860,17 +895,18 @@ function detailPhotoPicked(input){
 }
 
 async function analyzeDetailPhoto(){
-  if(!detailPhotoFile)return;
-  $('detailAnalyzeBtn').disabled=true;
+  if(!detailPhotoFile||photoSaveBusy)return;
+  setPhotoBusy(true);
 
   try{
     detailReviewed=await analyzeFile(detailPhotoFile,$('detailAnalyzeStatus'));
     renderDetailReview();
     $('detailReviewBox').classList.remove('hide');
+    $('detailAnalyzeStatus').textContent='Analysis complete. Review the items, then choose how to save.';
   }catch(e){
     $('detailAnalyzeStatus').textContent='Analyze error: '+e.message;
   }finally{
-    $('detailAnalyzeBtn').disabled=false;
+    setPhotoBusy(false);
   }
 }
 
@@ -887,32 +923,62 @@ function addDetailReviewItem(){
   renderDetailReview();
 }
 
+function setPhotoBusy(busy){
+  photoSaveBusy=busy;
+  ['savePhotoOnlyBtn','detailAnalyzeBtn','replaceScanBtn','addScanBtn','detailCameraInput','detailLibraryInput'].forEach(id=>$(id).disabled=busy);
+}
+function resetDetailPhoto(){
+  detailPhotoFile=null;
+  uploadedDetailPhoto=null;
+  detailReviewed=[];
+  ['detailNewPreview','detailAnalyzeBtn','savePhotoOnlyBtn','detailReviewBox'].forEach(id=>$(id).classList.add('hide'));
+  $('detailCameraInput').value='';
+  $('detailLibraryInput').value='';
+  $('detailAnalyzeStatus').textContent='';
+}
 async function saveDetailScan(mode){
+  if(photoSaveBusy)return;
   const items=detailReviewed.map(x=>x.trim()).filter(Boolean);
-  if(!detailSpot||!detailPhotoFile||!items.length)return;
-
-  $('detailStatus').textContent='Saving photo and inventory…';
-
+  if(!detailSpot||!detailPhotoFile){$('photoSaveStatus').textContent='Choose a new photo first.';return}
+  if(mode!=='photo'&&!items.length){$('photoSaveStatus').textContent='Keep at least one item before saving.';return}
+  const spotId=detailSpot.id;
+  const file=detailPhotoFile;
+  setPhotoBusy(true);
+  $('photoSaveStatus').textContent=mode==='photo'?'Saving photo…':'Saving photo and items…';
   try{
-    const path=await uploadInventoryPhoto(detailPhotoFile,detailSpot.id);
-
-    await api('?action='+(mode==='replace'?'replace-items':'add-items'),{
-      method:'POST',
-      body:JSON.stringify({spot_id:detailSpot.id,items,photo_path:path})
+    if(!uploadedDetailPhoto||uploadedDetailPhoto.file!==file||uploadedDetailPhoto.spotId!==spotId){
+      const path=await uploadInventoryPhoto(file,spotId);
+      uploadedDetailPhoto={file,spotId,path};
+    }
+    await api('?action='+({photo:'photo-only',replace:'replace-items',add:'add-items'}[mode]),{
+      method:'POST',body:JSON.stringify({spot_id:spotId,items,photo_path:uploadedDetailPhoto.path})
     });
-
-    detailPhotoFile=null;
-    detailReviewed=[];
-    $('detailNewPreview').classList.add('hide');
-    $('detailAnalyzeBtn').classList.add('hide');
-    $('detailReviewBox').classList.add('hide');
-
-    $('detailStatus').textContent='Saved.';
-    await load();
-    await openSpot(detailSpot.id);
+    if(detailSpot?.id!==spotId)return;
+    resetDetailPhoto();
+    const message=mode==='photo'?'✓ Photo updated. Item list unchanged.':mode==='add'?'✓ Items added to the existing list. Photo updated.':'✓ Item list replaced. Photo updated.';
+    $('photoSaveStatus').textContent=message;
+    try{
+      const refreshed=await openSpot(spotId,true);
+      await load();
+      $('photoSaveStatus').textContent=message+(refreshed?'':' Reopen this location to refresh its display.');
+    }catch(e){$('photoSaveStatus').textContent=message+' Reopen this location to refresh its display.'}
   }catch(e){
-    $('detailStatus').textContent=e.message;
-  }
+    $('photoSaveStatus').textContent='Save failed: '+e.message;
+  }finally{setPhotoBusy(false)}
+}
+async function deleteDetailPhoto(snapshotId){
+  if(photoSaveBusy)return;
+  if(!confirm('Delete this photo permanently? Your items will stay.'))return;
+  const spotId=detailSpot?.id;
+  if(!spotId)return;
+  setPhotoBusy(true);
+  $('photoSaveStatus').textContent='Deleting photo…';
+  try{
+    await api('?action=photo&snapshot_id='+encodeURIComponent(snapshotId),{method:'DELETE'});
+    const refreshed=await openSpot(spotId,true);
+    $('photoSaveStatus').textContent='✓ Photo deleted. Items unchanged.'+(refreshed?'':' Reopen this location to refresh its display.');
+  }catch(e){$('photoSaveStatus').textContent='Could not delete photo: '+e.message}
+  finally{setPhotoBusy(false)}
 }
 
 async function saveReviewed(again){
@@ -989,8 +1055,11 @@ async function boot(){
 }
 
 buildChoices();
-sb.auth.onAuthStateChange(()=>boot());
+sb.auth.onAuthStateChange((event)=>{
+  if(event==='SIGNED_OUT'||event==='SIGNED_IN')setTimeout(()=>boot(),0);
+});
 boot();
 </script>
 </body>
 </html>
+
