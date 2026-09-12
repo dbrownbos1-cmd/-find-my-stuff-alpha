@@ -149,7 +149,8 @@ details.group>summary::-webkit-details-marker{display:none}
 
         <div class="sectionTitle">Add more items</div>
         <textarea id="addItemsText" rows="3" placeholder="One item per line"></textarea>
-        <button onclick="addItemsToSpot()">Add items</button>
+        <button id="addItemsBtn" onclick="addItemsToSpot()">Add items</button>
+        <div id="addItemsStatus" class="status" role="status" aria-live="polite"></div>
 
         <div class="sectionTitle">Update this location with a photo</div><p class="muted">Take a new photo to let AI add to or replace the current item list.</p>
         <div class="row">
@@ -290,6 +291,7 @@ let detailSpot=null;
 let detailItems=[];
 let detailPhotoFile=null;
 let detailReviewed=[];
+let addingItems=false;
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -800,24 +802,48 @@ async function saveSpotName(){
 }
 
 async function addItemsToSpot(){
-  if(!detailSpot)return;
-  const items=$('addItemsText').value.split('\n').map(x=>x.trim()).filter(Boolean);
-  if(!items.length)return;
-
-  $('detailStatus').textContent='Adding items…';
+  if(!detailSpot||addingItems)return;
+  const input=$('addItemsText');
+  const items=input.value.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!items.length){input.focus();return}
+  const spotId=detailSpot.id;
+  addingItems=true;
+  $('addItemsBtn').disabled=true;
+  input.readOnly=true;
+  $('addItemsStatus').textContent='Adding items…';
 
   try{
     await api('?action=add-items',{
       method:'POST',
-      body:JSON.stringify({spot_id:detailSpot.id,items})
+      body:JSON.stringify({spot_id:spotId,items})
     });
 
-    $('addItemsText').value='';
-    $('detailStatus').textContent='Items added.';
-    await load();
-    await openSpot(detailSpot.id);
+    if(detailSpot?.id!==spotId)return;
+    input.value='';
+    $('addItemsStatus').textContent='✓ '+items.length+' item'+(items.length===1?'':'s')+' added.';
+    try{
+      const j=await api('?action=spot-detail&spot_id='+encodeURIComponent(spotId));
+      if(detailSpot?.id!==spotId)return;
+      // Preserve the form's viewport position as the list above it grows.
+      const anchorTop=input.getBoundingClientRect().top;
+      const drafts=new Map(detailItems.filter(x=>x.id).map(x=>[x.id,x]));
+      const fresh=detailItems.filter(x=>!x.id);
+      detailItems=(j.spot.items||[]).map(x=>drafts.get(x.id)||({...x})).concat(fresh);
+      detailSpot=j.spot;
+      renderDetailItems();
+      window.scrollBy({top:input.getBoundingClientRect().top-anchorTop,behavior:'instant'});
+      input.readOnly=false;
+      if($('detail').classList.contains('active'))input.focus({preventScroll:true});
+      await load();
+    }catch(e){
+      $('addItemsStatus').textContent='✓ Items saved. Could not refresh the list; reopen this location to see them.';
+    }
   }catch(e){
-    $('detailStatus').textContent=e.message;
+    $('addItemsStatus').textContent='Could not add items: '+e.message;
+  }finally{
+    addingItems=false;
+    $('addItemsBtn').disabled=false;
+    input.readOnly=false;
   }
 }
 
