@@ -11,6 +11,26 @@ function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 }
 
+function expirationDate(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value < '0001-01-01') {
+    throw new Error('Expiration date must be a valid date (YYYY-MM-DD).');
+  }
+  const parsed = new Date(value + 'T00:00:00Z');
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new Error('Expiration date must be a valid date (YYYY-MM-DD).');
+  }
+  return value;
+}
+
+function parseItems(value: unknown): { name: string; expiration_date: string | null }[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((x: any) => ({
+    name: typeof x === 'string' ? x.trim() : String(x?.name || '').trim(),
+    expiration_date: expirationDate(typeof x === 'string' ? null : x?.expiration_date)
+  })).filter(x => x.name);
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   const authHeader = req.headers.get('Authorization');
@@ -49,7 +69,7 @@ Deno.serve(async (req) => {
   }
 
   async function currentInventory(spotId: string) {
-    const { data, error } = await supabase.from('items').select('id,name,quantity,is_active,created_at').eq('current_spot_id', spotId).eq('is_active', true).order('created_at');
+    const { data, error } = await supabase.from('items').select('id,name,expiration_date,quantity,is_active,created_at').eq('current_spot_id', spotId).eq('is_active', true).order('created_at');
     if (error) throw error;
     return data || [];
   }
@@ -68,7 +88,7 @@ Deno.serve(async (req) => {
     if (req.method === 'GET' && action === 'inventory') {
       const { data, error } = await supabase
         .from('spots')
-        .select('id,name,position,primary_photo_path,created_at,updated_at,place:places(id,name,place_type),area:areas(id,name),items(id,name,quantity,is_active,created_at)')
+        .select('id,name,position,primary_photo_path,created_at,updated_at,place:places(id,name,place_type),area:areas(id,name),items(id,name,expiration_date,quantity,is_active,created_at)')
         .eq('is_active', true)
         .order('created_at', { ascending: false });
       if (error) throw error;
@@ -94,7 +114,7 @@ Deno.serve(async (req) => {
       if (!q) return json({ results: [] });
       const { data, error } = await supabase
         .from('items')
-        .select('id,name,quantity,current_spot_id,spot:spots(id,name,position,primary_photo_path,place:places(id,name),area:areas(id,name))')
+        .select('id,name,expiration_date,quantity,current_spot_id,spot:spots(id,name,position,primary_photo_path,place:places(id,name),area:areas(id,name))')
         .eq('is_active', true)
         .ilike('name', `%${q}%`)
         .limit(50);
@@ -111,7 +131,7 @@ Deno.serve(async (req) => {
       const spotName = String(body.spot || '').trim();
       const position = body.position ? String(body.position).trim() : null;
       const photoPath = body.photo_path ? String(body.photo_path).trim() : null;
-      const items = Array.isArray(body.items) ? body.items.map((x: unknown) => String(x).trim()).filter(Boolean) : [];
+      const items = parseItems(body.items);
       if (!placeName || !areaName || !spotName || !items.length) return json({ error: 'place, area, spot and items are required' }, 400);
 
       let place: { id: string } | null = null;
@@ -138,10 +158,10 @@ Deno.serve(async (req) => {
       }
       const spotIns = await supabase.from('spots').insert({ user_id: user.id, place_id: place.id, area_id: area.id, name: spotName, position, primary_photo_path: photoPath }).select('id,name,position').single();
       if (spotIns.error) throw spotIns.error;
-      const itemRows = items.map((name: string) => ({ user_id: user.id, current_spot_id: spotIns.data.id, name, normalized_name: name.toLowerCase() }));
-      const itemIns = await supabase.from('items').insert(itemRows).select('id,name');
+      const itemRows = items.map(item => ({ user_id: user.id, current_spot_id: spotIns.data.id, ...item, normalized_name: item.name.toLowerCase() }));
+      const itemIns = await supabase.from('items').insert(itemRows).select('id,name,expiration_date');
       if (itemIns.error) throw itemIns.error;
-      const snap = await supabase.from('spot_snapshots').insert({ user_id: user.id, spot_id: spotIns.data.id, photo_path: photoPath, inventory: items, snapshot_type: 'inventory' });
+      const snap = await supabase.from('spot_snapshots').insert({ user_id: user.id, spot_id: spotIns.data.id, photo_path: photoPath, inventory: items.map(x => x.name), snapshot_type: 'inventory' });
       if (snap.error) throw snap.error;
       return json({ spot: spotIns.data, items: itemIns.data }, 201);
     }
@@ -188,12 +208,12 @@ Deno.serve(async (req) => {
       const body = await req.json();
       const spotId = String(body.spot_id || '');
       const photoPath = body.photo_path ? String(body.photo_path).trim() : null;
-      const items = Array.isArray(body.items) ? body.items.map((x: unknown) => String(x).trim()).filter(Boolean) : [];
+      const items = parseItems(body.items);
       if (!spotId || !items.length) return json({ error: 'spot_id and items are required' }, 400);
       const target = await supabase.from('spots').select('id').eq('id', spotId).single();
       if (target.error) throw target.error;
-      const rows = items.map((name: string) => ({ user_id: user.id, current_spot_id: spotId, name, normalized_name: name.toLowerCase() }));
-      const ins = await supabase.from('items').insert(rows).select('id,name');
+      const rows = items.map(item => ({ user_id: user.id, current_spot_id: spotId, ...item, normalized_name: item.name.toLowerCase() }));
+      const ins = await supabase.from('items').insert(rows).select('id,name,expiration_date');
       if (ins.error) throw ins.error;
       const allItems = await currentInventory(spotId);
       const snap = await supabase.from('spot_snapshots').insert({ user_id: user.id, spot_id: spotId, photo_path: photoPath, inventory: allItems.map((x: any) => x.name), snapshot_type: 'add' });
@@ -209,14 +229,14 @@ Deno.serve(async (req) => {
       const body = await req.json();
       const spotId = String(body.spot_id || '');
       const photoPath = body.photo_path ? String(body.photo_path).trim() : null;
-      const items = Array.isArray(body.items) ? body.items.map((x: unknown) => String(x).trim()).filter(Boolean) : [];
+      const items = parseItems(body.items);
       if (!spotId || !items.length) return json({ error: 'spot_id and items are required' }, 400);
       const off = await supabase.from('items').update({ is_active: false }).eq('current_spot_id', spotId).eq('is_active', true);
       if (off.error) throw off.error;
-      const rows = items.map((name: string) => ({ user_id: user.id, current_spot_id: spotId, name, normalized_name: name.toLowerCase() }));
-      const ins = await supabase.from('items').insert(rows).select('id,name');
+      const rows = items.map(item => ({ user_id: user.id, current_spot_id: spotId, ...item, normalized_name: item.name.toLowerCase() }));
+      const ins = await supabase.from('items').insert(rows).select('id,name,expiration_date');
       if (ins.error) throw ins.error;
-      const snap = await supabase.from('spot_snapshots').insert({ user_id: user.id, spot_id: spotId, photo_path: photoPath, inventory: items, snapshot_type: 'rescan' });
+      const snap = await supabase.from('spot_snapshots').insert({ user_id: user.id, spot_id: spotId, photo_path: photoPath, inventory: items.map(x => x.name), snapshot_type: 'rescan' });
       if (snap.error) throw snap.error;
       if (photoPath) {
         const upd = await supabase.from('spots').update({ primary_photo_path: photoPath }).eq('id', spotId);
@@ -274,7 +294,9 @@ Deno.serve(async (req) => {
       const itemId = String(body.item_id || '');
       const name = String(body.name || '').trim();
       if (!itemId || !name) return json({ error: 'item_id and name are required' }, 400);
-      const upd = await supabase.from('items').update({ name, normalized_name: name.toLowerCase() }).eq('id', itemId).eq('user_id', user.id).select('id,name').single();
+      const patch: Record<string, unknown> = { name, normalized_name: name.toLowerCase() };
+      if (body.expiration_date !== undefined) patch.expiration_date = expirationDate(body.expiration_date);
+      const upd = await supabase.from('items').update(patch).eq('id', itemId).eq('user_id', user.id).select('id,name,expiration_date').single();
       if (upd.error) throw upd.error;
       return json({ item: upd.data });
     }
@@ -290,6 +312,7 @@ Deno.serve(async (req) => {
     return json({ error: 'Unknown route' }, 404);
   } catch (e) {
     console.error(e);
-    return json({ error: e instanceof Error ? e.message : 'Unexpected error' }, 500);
+    return json({ error: e instanceof Error ? e.message : 'Unexpected error' }, e instanceof Error && e.message.startsWith('Expiration date must') ? 400 : 500);
   }
 });
+

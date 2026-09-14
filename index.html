@@ -59,6 +59,12 @@ details.group>summary::-webkit-details-marker{display:none}
 .toggleLabel{color:var(--green);font-size:14px;font-weight:800;white-space:nowrap}
 .toggleChevron{display:inline-block;margin-left:4px;transition:transform .15s ease}
 .homeRecent[open] .toggleChevron{transform:rotate(180deg)}
+.itemEditor{margin:10px 0;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.expiration{margin:4px 0 0;font-size:13px;color:var(--muted)}
+.expiration summary{cursor:pointer;padding:6px 0;color:var(--green)}
+.expiration label{display:block;margin-top:6px}
+.expiration input{max-width:100%;min-width:0;margin:6px 0}
+.itemrow input{min-width:0}
 </style>
 </head>
 <body>
@@ -303,6 +309,24 @@ const esc=s=>String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&
 const placeTypes=['Home','Second Home','Camp/Cottage','Storage Unit','Office','RV','Boat','Other'];
 const areas=['Kitchen','Pantry','Living Room','Dining Room','Bedroom','Bathroom','Closet','Laundry','Garage','Basement','Attic','Shed','Office','Outside','Other'];
 
+function expirationLabel(value){
+  if(!value)return '+ Expiration date';
+  const [year,month,day]=value.split('-').map(Number);
+  const date=new Date(0);date.setFullYear(year,month-1,day);date.setHours(12,0,0,0);
+  return 'Expiration: '+date.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});
+}
+function itemPayload(items){
+  return items.map(x=>({name:x.name.trim(),expiration_date:x.expiration_date||null})).filter(x=>x.name);
+}
+function expirationEditor(x,i,list){
+  const id=list+'-expiration-'+i;
+  return `<details class="expiration"><summary>${esc(expirationLabel(x.expiration_date))}</summary>
+    <label for="${id}">Expiration date (optional)</label>
+    <input id="${id}" type="date" min="0001-01-01" max="9999-12-31" value="${esc(x.expiration_date||'')}" onchange="${list}[${i}].expiration_date=this.value||null;this.closest('details').querySelector('summary').textContent=expirationLabel(this.value)">
+    <button class="ghost" type="button" onclick="${list}[${i}].expiration_date=null;$('${id}').value='';this.closest('details').querySelector('summary').textContent=expirationLabel(null)">Clear date</button>
+  </details>`;
+}
+
 function normName(x){return String(x||'').trim().replace(/\s+/g,' ').toLowerCase()}
 function buildChoices(){
   $('placeTypeGrid').innerHTML=placeTypes.map(x=>`<button class="choice ${x===wizard.placeType?'active':''}" data-val="${esc(x)}" onclick="choosePlaceType(this)">${esc(x)}</button>`).join('');
@@ -537,7 +561,7 @@ async function analyzePhoto(){
   if(!photoFile)return;
   $('analyzeBtn').disabled=true;
   try{
-    reviewed=await analyzeFile(photoFile,$('analyzeStatus'));
+    reviewed=(await analyzeFile(photoFile,$('analyzeStatus'))).map(name=>({name,expiration_date:null}));
     renderReview();
     showStep('stepReview');
   }catch(e){
@@ -549,17 +573,17 @@ async function analyzePhoto(){
 function renderReview(){
   $('foundCount').textContent=`✨ ${reviewed.length} item${reviewed.length===1?'':'s'} discovered`;
   $('reviewItems').innerHTML=reviewed.map((x,i)=>`
-    <div class="itemrow">
-      <input value="${esc(x)}" oninput="reviewed[${i}]=this.value">
-      <button class="ghost" onclick="removeReviewItem(${i})">✕</button>
-    </div>`).join('');
+    <div class="itemEditor"><div class="itemrow">
+      <input class="itemName" aria-label="Item name" value="${esc(x.name)}" oninput="reviewed[${i}].name=this.value">
+      <button class="ghost" aria-label="Remove item" onclick="removeReviewItem(${i})">✕</button>
+    </div>${expirationEditor(x,i,'reviewed')}</div>`).join('');
 }
 function removeReviewItem(i){reviewed.splice(i,1);renderReview()}
 function addReviewItem(){
-  reviewed.push('');
+  reviewed.push({name:'',expiration_date:null});
   renderReview();
   setTimeout(()=>{
-    const ins=$('reviewItems').querySelectorAll('input');
+    const ins=$('reviewItems').querySelectorAll('input.itemName');
     ins[ins.length-1]?.focus();
   },0);
 }
@@ -636,7 +660,7 @@ function runSearch(){
       const j=await api('?action=search&q='+encodeURIComponent(q));
       $('searchResults').innerHTML=(j.results||[]).map(i=>`
         <div class="searchHit" onclick="openSpot('${i.spot?.id}')">
-          <b>${esc(i.name)}</b>
+          <b>${esc(i.name)}</b>${i.expiration_date?`<div class="muted">${esc(expirationLabel(i.expiration_date))}</div>`:''}
           <span class="muted">${esc([i.spot?.place?.name,i.spot?.area?.name,i.spot?.name].filter(Boolean).join(' → '))}</span>
         </div>`).join('')||'<p class="muted">No match found.</p>';
     }catch(e){
@@ -705,17 +729,17 @@ async function openSpot(id,refreshOnly=false){
 
 function renderDetailItems(){
   $('detailItems').innerHTML=detailItems.map((x,i)=>`
-    <div class="itemrow">
-      <input value="${esc(x.name)}" oninput="detailItems[${i}].name=this.value">
-      <button class="danger" onclick="removeDetailItem(${i})">✕</button>
-    </div>`).join('')||'<p class="muted">No active items.</p>';
+    <div class="itemEditor"><div class="itemrow">
+      <input class="itemName" aria-label="Item name" value="${esc(x.name)}" oninput="detailItems[${i}].name=this.value">
+      <button class="danger" aria-label="Remove item" onclick="removeDetailItem(${i})">✕</button>
+    </div>${expirationEditor(x,i,'detailItems')}</div>`).join('')||'<p class="muted">No active items.</p>';
 }
 
 function addBlankDetailItem(){
   detailItems.push({id:null,name:''});
   renderDetailItems();
   setTimeout(()=>{
-    const ins=$('detailItems').querySelectorAll('input');
+    const ins=$('detailItems').querySelectorAll('input.itemName');
     ins[ins.length-1]?.focus();
   },0);
 }
@@ -747,11 +771,11 @@ async function saveItemEdits(){
     for(const x of existing){
       await api('?action=item',{
         method:'PATCH',
-        body:JSON.stringify({item_id:x.id,name:x.name.trim()})
+        body:JSON.stringify({item_id:x.id,name:x.name.trim(),expiration_date:x.expiration_date||null})
       });
     }
 
-    const fresh=detailItems.filter(x=>!x.id&&x.name.trim()).map(x=>x.name.trim());
+    const fresh=itemPayload(detailItems.filter(x=>!x.id));
     if(fresh.length){
       await api('?action=add-items',{
         method:'POST',
@@ -899,7 +923,7 @@ async function analyzeDetailPhoto(){
   setPhotoBusy(true);
 
   try{
-    detailReviewed=await analyzeFile(detailPhotoFile,$('detailAnalyzeStatus'));
+    detailReviewed=(await analyzeFile(detailPhotoFile,$('detailAnalyzeStatus'))).map(name=>({name,expiration_date:null}));
     renderDetailReview();
     $('detailReviewBox').classList.remove('hide');
     $('detailAnalyzeStatus').textContent='Analysis complete. Review the items, then choose how to save.';
@@ -912,14 +936,14 @@ async function analyzeDetailPhoto(){
 
 function renderDetailReview(){
   $('detailReviewItems').innerHTML=detailReviewed.map((x,i)=>`
-    <div class="itemrow">
-      <input value="${esc(x)}" oninput="detailReviewed[${i}]=this.value">
-      <button class="ghost" onclick="detailReviewed.splice(${i},1);renderDetailReview()">✕</button>
-    </div>`).join('');
+    <div class="itemEditor"><div class="itemrow">
+      <input class="itemName" aria-label="Item name" value="${esc(x.name)}" oninput="detailReviewed[${i}].name=this.value">
+      <button class="ghost" aria-label="Remove item" onclick="detailReviewed.splice(${i},1);renderDetailReview()">✕</button>
+    </div>${expirationEditor(x,i,'detailReviewed')}</div>`).join('');
 }
 
 function addDetailReviewItem(){
-  detailReviewed.push('');
+  detailReviewed.push({name:'',expiration_date:null});
   renderDetailReview();
 }
 
@@ -938,7 +962,7 @@ function resetDetailPhoto(){
 }
 async function saveDetailScan(mode){
   if(photoSaveBusy)return;
-  const items=detailReviewed.map(x=>x.trim()).filter(Boolean);
+  const items=itemPayload(detailReviewed);
   if(!detailSpot||!detailPhotoFile){$('photoSaveStatus').textContent='Choose a new photo first.';return}
   if(mode!=='photo'&&!items.length){$('photoSaveStatus').textContent='Keep at least one item before saving.';return}
   const spotId=detailSpot.id;
@@ -983,7 +1007,7 @@ async function deleteDetailPhoto(snapshotId){
 
 async function saveReviewed(again){
   if(saveInProgress)return;
-  const items=reviewed.map(x=>x.trim()).filter(Boolean);
+  const items=itemPayload(reviewed);
   if(!items.length){
     $('saveStatus').textContent='Keep at least one item before saving.';
     return;
@@ -1062,4 +1086,5 @@ boot();
 </script>
 </body>
 </html>
+
 
