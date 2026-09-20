@@ -59,9 +59,9 @@ details.group>summary::-webkit-details-marker{display:none}
 .toggleLabel{color:var(--green);font-size:14px;font-weight:800;white-space:nowrap}
 .toggleChevron{display:inline-block;margin-left:4px;transition:transform .15s ease}
 .homeRecent[open] .toggleChevron{transform:rotate(180deg)}
-.itemEditor{margin:10px 0;padding-bottom:10px;border-bottom:1px solid var(--line)}
-.expiration{margin:4px 0 0;font-size:13px;color:var(--muted)}
-.expiration summary{cursor:pointer;padding:6px 0;color:var(--green)}
+.itemEditor{margin:6px 0;padding-bottom:4px;border-bottom:1px solid var(--line)}
+.expiration{margin:0;font-size:13px;color:var(--muted)}
+.expiration summary{cursor:pointer;padding:8px 0;color:var(--green);width:fit-content}
 .expiration label{display:block;margin-top:6px}
 .expiration input{max-width:100%;min-width:0;margin:6px 0}
 .itemrow input{min-width:0}
@@ -202,14 +202,15 @@ details.group>summary::-webkit-details-marker{display:none}
             <label>Choose an existing place</label>
             <div class="grid" id="existingPlaceChoices" style="margin:8px 0 16px"></div>
           </div>
-          <button id="showNewPlaceBtn" class="secondary" onclick="showNewPlaceForm()">＋ Add a new place</button>
+          <button id="showNewPlaceBtn" onclick="showNewPlaceForm()">+ Add new place</button>
           <div id="newPlaceFields" class="hide" style="margin-top:16px">
-            <div class="muted" style="font-size:13px;margin-bottom:12px">Only use this when adding a genuinely different property.</div>
+            <h3>Add new place</h3>
             <label>What kind of place is it?</label>
             <div class="grid" id="placeTypeGrid"></div>
             <label>Name the new place</label>
             <input id="placeName" placeholder="e.g. Florida House">
-            <button onclick="nextFromPlace()">Create place & choose a room</button>
+            <button onclick="nextFromPlace()">Next: choose a room →</button>
+            <button id="cancelNewPlaceBtn" class="secondary" onclick="creatingNewPlace=false;renderExistingPlaces()">← Choose an existing place</button>
           </div>
         </div>
 
@@ -310,7 +311,7 @@ const placeTypes=['Home','Second Home','Camp/Cottage','Storage Unit','Office','R
 const areas=['Kitchen','Pantry','Living Room','Dining Room','Bedroom','Bathroom','Closet','Laundry','Garage','Basement','Attic','Shed','Office','Outside','Other'];
 
 function expirationLabel(value){
-  if(!value)return '+ Expiration date';
+  if(!value)return 'Item details';
   const [year,month,day]=value.split('-').map(Number);
   const date=new Date(0);date.setFullYear(year,month-1,day);date.setHours(12,0,0,0);
   return 'Expiration: '+date.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});
@@ -367,7 +368,8 @@ function renderKnownSpots(){
 }
 function renderExistingPlaces(){
   const hasPlaces=availablePlaces.length>0;
-  $('existingPlaceWrap').classList.toggle('hide',!hasPlaces);
+  $('existingPlaceWrap').classList.toggle('hide',!hasPlaces||creatingNewPlace);
+  $('cancelNewPlaceBtn').classList.toggle('hide',!hasPlaces);
   $('showNewPlaceBtn').classList.toggle('hide',!hasPlaces||creatingNewPlace);
   $('newPlaceFields').classList.toggle('hide',!creatingNewPlace);
   $('existingPlaceChoices').innerHTML=availablePlaces.map(p=>`<button class="choice" onclick="chooseExistingPlace('${p.id}')">${esc(p.name)}</button>`).join('');
@@ -1086,5 +1088,4 @@ boot();
 </script>
 </body>
 </html>
-
 
