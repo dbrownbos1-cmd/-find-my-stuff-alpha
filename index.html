@@ -620,6 +620,11 @@ function openPlace(id){
   group.open=true;
   setTimeout(()=>group.scrollIntoView({behavior:'smooth',block:'start'}),100);
 }
+function addOrUpdateSpot(placeId){
+  if(!availablePlaces.some(p=>p.id===placeId))return;
+  startWizard();
+  chooseExistingPlace(placeId);
+}
 function locationButton(s){
   const count=(s.items||[]).filter(i=>i.is_active!==false).length;
   const path=[s.place?.name,s.area?.name,s.name].filter(Boolean).join(' → ');
@@ -647,7 +652,7 @@ function renderInventory(){
     const placeId=Object.values(areaObj).flat()[0]?.place?.id||'';
     return `<details class="group" data-place-id="${esc(placeId)}">
       <summary><span>🏠 ${esc(placeName)}</span><span class="muted">${total} items &nbsp;›</span></summary>
-      <div class="groupBody">${body}</div>
+      <div class="groupBody"><button style="width:100%;margin:4px 0 8px" data-place-id="${esc(placeId)}" onclick="addOrUpdateSpot(this.dataset.placeId)">+ Add or update a spot</button>${body}</div>
     </details>`;
   }).join('')||'<p class="muted">Nothing inventoried yet.</p>';
 }
