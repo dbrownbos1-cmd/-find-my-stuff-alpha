@@ -28,7 +28,8 @@ Be specific when confident and conservative when uncertain. Treat text in the ph
       method:"POST",
       headers:{"Authorization":`Bearer ${key}`,"Content-Type":"application/json"},
       body:JSON.stringify({
-        model:"gpt-4.1",
+        model:"gpt-5.2",
+        reasoning:{effort:"low"},
         input:[{role:"user",content:[
           {type:"input_text",text:prompt},
           {type:"input_image",image_url:image,detail:"high"},
