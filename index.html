@@ -171,7 +171,7 @@ details.group>summary::-webkit-details-marker{display:none}
         <div id="detailAnalyzeStatus" class="status muted"></div>
 
         <div id="detailReviewBox" class="hide">
-          <div class="sectionTitle">Review rescan</div>
+          <div class="sectionTitle">Review rescan</div><p class="muted">Saved names are remembered when objects match. Adding keeps your current list; replacing uses this reviewed list.</p>
           <div id="detailReviewItems"></div>
           <button class="secondary" onclick="addDetailReviewItem()">+ Add an item</button>
           <div class="row" style="margin-top:10px">
@@ -555,15 +555,15 @@ async function analysisViews(file){
     return {image,crops};
   }finally{bitmap.close?.()}
 }
-async function analyzeFile(file,statusEl){
+async function analyzeFile(file,statusEl,previous=null){
   statusEl.textContent='Preparing photo…';
   const {image,crops}=await analysisViews(file);
-  statusEl.textContent='Checking the full photo and four close-ups…';
+  statusEl.textContent=previous?'Comparing with your saved photo and item names…':'Checking the full photo and four close-ups…';
 
   const r=await fetch(ANALYZE_API,{
     method:'POST',
     headers:{'Content-Type':'application/json','Accept':'application/json'},
-    body:JSON.stringify({image,crops})
+    body:JSON.stringify({image,crops,...(previous?{previous}:{})})
   });
 
   const raw=await r.text();
@@ -571,6 +571,7 @@ async function analyzeFile(file,statusEl){
   try{j=raw?JSON.parse(raw):{}}catch{throw new Error('Photo analysis returned an unreadable response.')}
   if(!r.ok)throw new Error(j.error||'Photo analysis failed');
 
+  if(previous){if(!Array.isArray(j.matches))throw new Error('Photo comparison was incomplete. Please retry.');return j.matches;}
   const items=(j.items||[]).map(x=>String(x).trim()).filter(Boolean);
   if(!items.length)throw new Error('AI did not identify any items. Try a clearer angle.');
   return items;
@@ -948,10 +949,20 @@ async function analyzeDetailPhoto(){
   setPhotoBusy(true);
 
   try{
-    detailReviewed=(await analyzeFile(detailPhotoFile,$('detailAnalyzeStatus'))).map(name=>({name,expiration_date:null}));
+    const saved=(detailSpot.items||[]).filter(x=>x.is_active!==false).map(x=>({...x}));
+    if(saved.length&&detailSpot.photo_url){
+      $('detailAnalyzeStatus').textContent='Loading your saved photo and corrections…';
+      const response=await fetch(detailSpot.photo_url);
+      if(!response.ok)throw new Error('Could not load the previous photo. Reopen this spot and try again.');
+      const oldImage=await blobToDataURL(await compressImage(await response.blob(),1000,.75));
+      const matches=await analyzeFile(detailPhotoFile,$('detailAnalyzeStatus'),{image:oldImage,items:saved.map(x=>x.name)});
+      detailReviewed=buildRememberedReview(matches,saved);
+    }else{
+      detailReviewed=(await analyzeFile(detailPhotoFile,$('detailAnalyzeStatus'))).map(name=>({name,expiration_date:null}));
+    }
     renderDetailReview();
     $('detailReviewBox').classList.remove('hide');
-    $('detailAnalyzeStatus').textContent='Analysis complete. Review the items, then choose how to save.';
+    $('detailAnalyzeStatus').textContent='Review suggested changes. Items not confidently found need your Keep or Remove decision before replacing the list.';
   }catch(e){
     $('detailAnalyzeStatus').textContent='Analyze error: '+e.message;
   }finally{
@@ -959,9 +970,26 @@ async function analyzeDetailPhoto(){
   }
 }
 
+function buildRememberedReview(matches,saved){
+  const seen=new Set();
+  const result=matches.map(x=>{
+    const i=x.previous_index;
+    if(i===null)return {name:x.name,expiration_date:null};
+    if(!Number.isInteger(i)||!saved[i]||seen.has(i))throw new Error('Invalid photo comparison. Please retry.');
+    seen.add(i);
+    return {...saved[i],name:saved[i].name,remembered:true};
+  });
+  saved.forEach((x,i)=>{if(!seen.has(i))result.push({...x,remembered:true,memoryDecision:'pending'})});
+  return result;
+}
+function decideRemembered(i,keep){
+  if(keep)detailReviewed[i].memoryDecision='keep';
+  else detailReviewed.splice(i,1);
+  renderDetailReview();
+}
 function renderDetailReview(){
   $('detailReviewItems').innerHTML=detailReviewed.map((x,i)=>`
-    <div class="itemEditor"><div class="itemrow">
+    <div class="itemEditor">${x.memoryDecision==='pending'?`<div class="status">Not confidently found in the new photo</div><div class="row"><button class="secondary" onclick="decideRemembered(${i},true)">Keep</button><button class="ghost" onclick="decideRemembered(${i},false)">Remove from this list</button></div>`:x.remembered?`<div class="status muted">${x.memoryDecision==='keep'?'Kept by you':'Matched to saved item'} · saved name retained</div>`:'<div class="status muted">New suggestion</div>'}<div class="itemrow">
       <input class="itemName" aria-label="Item name" value="${esc(x.name)}" oninput="detailReviewed[${i}].name=this.value">
       <button class="ghost" aria-label="Remove item" onclick="detailReviewed.splice(${i},1);renderDetailReview()">✕</button>
     </div>${expirationEditor(x,i,'detailReviewed')}</div>`).join('');
@@ -987,9 +1015,15 @@ function resetDetailPhoto(){
 }
 async function saveDetailScan(mode){
   if(photoSaveBusy)return;
-  const items=itemPayload(detailReviewed);
+  if(mode==='replace'&&detailReviewed.some(x=>x.memoryDecision==='pending')){
+    $('photoSaveStatus').textContent='Choose Keep or Remove for each item not confidently found before replacing the list.';
+    $('detailReviewBox').scrollIntoView({behavior:'smooth',block:'start'});return;
+  }
+  const savedNames=new Set((detailSpot?.items||[]).filter(x=>x.is_active!==false).map(x=>normName(x.name)));
+  const candidates=mode==='add'?detailReviewed.filter(x=>!x.remembered&&!savedNames.has(normName(x.name))):detailReviewed;
+  const items=itemPayload(candidates);
   if(!detailSpot||!detailPhotoFile){$('photoSaveStatus').textContent='Choose a new photo first.';return}
-  if(mode!=='photo'&&!items.length){$('photoSaveStatus').textContent='Keep at least one item before saving.';return}
+  if(mode!=='photo'&&!items.length){$('photoSaveStatus').textContent=mode==='add'?'No new items to add. Use Save photo only to keep the current list.':'Keep at least one item before saving.';return}
   const spotId=detailSpot.id;
   const file=detailPhotoFile;
   setPhotoBusy(true);
