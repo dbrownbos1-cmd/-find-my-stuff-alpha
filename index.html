@@ -260,7 +260,7 @@ details.group>summary::-webkit-details-marker{display:none}
         <div id="stepReview" class="step">
           <h3>5. Review what AI found</h3>
           <div id="foundCount" class="pill"></div>
-          <div id="reviewItems"></div>
+          <details><summary>Compare with your photo</summary><img id="reviewPhoto" class="preview" alt="Photo being inventoried"></details><p class="muted">Check names and add anything missed. “Check type” means the object needs your identification.</p><div id="reviewItems"></div>
           <button class="secondary" onclick="addReviewItem()">+ Add an item</button>
           <div class="row" style="margin-top:14px">
             <button class="secondary" onclick="showStep('stepPhoto')">← Back</button>
@@ -537,16 +537,33 @@ async function uploadInventoryPhoto(file,spotFolder='new'){
   if(error)throw error;
   return path;
 }
+async function analysisViews(file){
+  const bitmap=await createImageBitmap(file);
+  try{
+    const w=bitmap.width,h=bitmap.height;
+    const render=(x,y,sw,sh,maxDim)=>{
+      const c=document.createElement('canvas');
+      const scale=Math.min(1,maxDim/Math.max(sw,sh));
+      c.width=Math.max(1,Math.round(sw*scale));c.height=Math.max(1,Math.round(sh*scale));
+      c.getContext('2d').drawImage(bitmap,x,y,sw,sh,0,0,c.width,c.height);
+      return c.toDataURL('image/jpeg',.8);
+    };
+    const image=render(0,0,w,h,1600);
+    const sw=Math.ceil(w*.6),sh=Math.ceil(h*.6);
+    const crops=[[0,0],[w-sw,0],[0,h-sh],[w-sw,h-sh]].map(([x,y])=>render(x,y,sw,sh,1000));
+    if(image.length+crops.reduce((n,x)=>n+x.length,0)>3700000)throw new Error('Photo is too detailed to send. Try a smaller photo.');
+    return {image,crops};
+  }finally{bitmap.close?.()}
+}
 async function analyzeFile(file,statusEl){
   statusEl.textContent='Preparing photo…';
-  const compressed=await compressImage(file);
-  const image=await blobToDataURL(compressed);
-  statusEl.textContent='AI is looking through this space…';
+  const {image,crops}=await analysisViews(file);
+  statusEl.textContent='Checking the full photo and four close-ups…';
 
   const r=await fetch(ANALYZE_API,{
     method:'POST',
     headers:{'Content-Type':'application/json','Accept':'application/json'},
-    body:JSON.stringify({image})
+    body:JSON.stringify({image,crops})
   });
 
   const raw=await r.text();
@@ -564,6 +581,7 @@ async function analyzePhoto(){
   $('analyzeBtn').disabled=true;
   try{
     reviewed=(await analyzeFile(photoFile,$('analyzeStatus'))).map(name=>({name,expiration_date:null}));
+    $('reviewPhoto').src=$('preview').src;
     renderReview();
     showStep('stepReview');
   }catch(e){
@@ -573,7 +591,7 @@ async function analyzePhoto(){
   }
 }
 function renderReview(){
-  $('foundCount').textContent=`✨ ${reviewed.length} item${reviewed.length===1?'':'s'} discovered`;
+  $('foundCount').textContent=`✨ ${reviewed.length} suggested item${reviewed.length===1?'':'s'}`;
   $('reviewItems').innerHTML=reviewed.map((x,i)=>`
     <div class="itemEditor"><div class="itemrow">
       <input class="itemName" aria-label="Item name" value="${esc(x.name)}" oninput="reviewed[${i}].name=this.value">
